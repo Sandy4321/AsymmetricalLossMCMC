@@ -1,0 +1,549 @@
+---
+title: "Scoring"
+author: "Deepak Bastola"
+date: "April 11, 2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+```{r,message=FALSE, warning=FALSE}
+library(mcmcse)
+library(Matrix)
+library(matrixcalc)
+library(mAr)
+library(scoringRules)
+library(parallel)
+
+n <- 1e5
+p <- 5
+omega <- diag(p)
+
+#latest paper conditions
+A <- matrix(rnorm(p*p,mean=0,sd=1), p, p)
+B <- A%*%t(A)
+m <- max(eigen(B)$values)
+phi0 <- B/(m+0.001)
+phi <- bdiag(0.95*phi0)
+
+#population covariance
+scratch <- diag((p)^2) - kronecker(phi,phi)
+V.s <- solve(scratch)%*%vec(diag(p))
+V <- matrix(V.s, nrow = p, byrow = TRUE)
+Sigma <- solve(diag(p)-phi)%*%V + V%*%solve(diag(p)-phi) -V
+Tau.1 <- (solve(diag(p) - phi))^2%*%phi%*%V
+Tau.2 <- V%*%t(phi)%*%(solve(diag(p)-t(phi)))^2
+Tau <- -(Tau.1 + Tau.2)
+```
+
+
+```{r}
+#Markov Chain
+nchain <- 5000
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+starttime <- Sys.time()
+chain_big <- mclapply(1:nchain, function(i) as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = n)), mc.preschedule = TRUE, mc.cores = 6)
+#chain2e4 <- mclapply(1:nchain, function(i) as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = 2e4)), mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+save(chain_big, file = "/home/deepak/Desktop/Rdata/chainbig.Rda")
+#save(chain, file = "/home/deepak/Desktop/Rdata/chain2e4.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/chain5e4.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/chain2e4.Rda")
+
+save(Sigma, file = "/home/deepak/Desktop/Rdata/Sigmabig.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/Sigma5e4.Rda")
+
+```
+
+
+```{r}
+# Spectral - Lugsail
+# c= 1/2, r = 2 
+
+# batch sizes 
+b <- seq(n^(.30), n^(0.52), 10)
+
+#set.seed(123, kind = "L'Ecuyer-CMRG" );
+#starttime <- Sys.time()
+#lugsailspec <- mclapply(1:200, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bartlett", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bartlett", size=b[i]/2)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+#endtime <- Sys.time()
+#endtime - starttime
+#save(lugsailspec, file = "/home/deepak/Desktop/Rdata/lugspec.Rda")
+load(file = "/home/deepak/Desktop/Rdata/lugspec.Rda")
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:200, function(i) diag(lugsailspec[[i]][[j]])))))
+
+#score
+# Univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+#estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+scores <- sapply(1:5, function(i) min(scoreUni[,i])); scores
+
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+min(scoreMulti)
+
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+```{r}
+# Lugsail - BM
+# c= 1/2, r = 2 
+
+# batch sizes 
+b <- seq(n^(.3), n^(0.52), 1)
+
+# compute lugsail batch means
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+starttime <- Sys.time()
+#lugsail <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bm", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bm", size=b[i]/2)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+#save(lugsail, file = "/home/deepak/Desktop/Rdata/lug.Rda")
+load(file = "/home/deepak/Desktop/Rdata/lug.Rda")
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Lugsail
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:nchain, function(i) diag(lugsail[[i]][[j]])))))
+
+#score
+# Univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+# Estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+scores <- sapply(1:5, function(i) min(scoreUni[,i])); scores
+
+
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+min(scoreMulti)
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+```{r}
+# Lugsail - BM
+# c= 1/2, r = 2 
+
+n <-2e4
+# batch sizes 
+b <- seq(n^(.3), n^(0.52), 1)
+
+# compute lugsail batch means
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+starttime <- Sys.time()
+lugsail2n <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain2e4[[j]], method = "bm", size=b[i])[[1]] - mcse.multi(chain2e4[[j]], method = "bm", size=b[i]/2)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+save(lugsail2n, file = "/home/deepak/Desktop/Rdata/lug2n.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/lug2n.Rda")
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Lugsail
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:nchain, function(i) diag(lugsail[[i]][[j]])))))
+
+#score
+# Univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+# Estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+scores <- sapply(1:5, function(i) min(scoreUni[,i])); scores
+
+
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+min(scoreMulti)
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+
+```{r}
+#Batch means
+# c= 1/2, r = 1
+
+b <- seq(n^(.30), n^(0.60), 1)
+
+#compute batch means
+set.seed(123, kind = "L'Ecuyer-CMRG");
+starttime <- Sys.time()
+#bm <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) mcse.multi(chain[[j]], method = "bm", size=b[i])[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+#save(bm, file = "/home/deepak/Desktop/Rdata/bm.Rda")
+load(file = "/home/deepak/Desktop/Rdata/bm.Rda")
+
+# Collect all the computed diagonal estimaors
+xxl <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:1000, function(i) diag(bm[[i]][[j]])))))
+
+#score
+#univariate scoring rules
+scoreBM <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xxl[[i]])))
+scoreUniBM <- do.call(rbind, scoreBM)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUniBM[,i])])
+b.est.uni
+scores <- sapply(1:5, function(i) min(scoreUniBM[,i])); scores
+
+# Multivariate scoring rules
+scoreBMmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xxl[[i]])))
+scoreMBM <- do.call(rbind, scoreBMmulti)
+
+par(mfrow=c(2,3))
+plot(b, scoreUniBM[,1], type = "l")
+plot(b, scoreUniBM[,2], type = "l")
+plot(b, scoreUniBM[,3], type = "l")
+plot(b, scoreUniBM[,4], type = "l")
+plot(b, scoreUniBM[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMBM)]
+b.est.multi
+min(scoreMBM)
+plot(b, scoreMBM, type = "l")
+
+```
+
+```{r}
+# Lugsail
+# c= 1/2, r = 3
+
+# batch sizes 
+b <- seq(n^(.29), n^(0.52), 1)
+
+# compute lugsail batch means
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+starttime <- Sys.time()
+#lugsail3 <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bm", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bm", size=b[i]/3)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+#save(lugsail3, file = "/home/deepak/Desktop/Rdata/lug3.Rda")
+load(file = "/home/deepak/Desktop/Rdata/lug3.Rda")
+
+# Call them coming from Normal distribution ~ N(Sigma^2, 2*Sigma^4*b/n)
+# give each estimator a score coresponding to truth/estimated value.
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Lugsail
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:nchain, function(i) diag(lugsail3[[i]][[j]])))))
+
+#score
+#univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+#estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+```{r, eval = FALSE}
+# Lugsail
+# c= 1/2, r = 4
+
+# batch sizes 
+b <- seq(n^(.32), n^(0.6), 10)
+
+# compute lugsail batch means
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+starttime <- Sys.time()
+lugsail4 <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bm", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bm", size=b[i]/4)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+#save(lugsail, file = "/home/deepak/Desktop/Rdata/lug.Rda")
+#load("/home/deepak/lest200.Rda")
+
+# Call them coming from Normal distribution ~ N(Sigma^2, 2*Sigma^4*b/n)
+# give each estimator a score coresponding to truth/estimated value.
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Lugsail
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:nchain, function(i) diag(lugsail4[[i]][[j]])))))
+
+#score
+#univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+#estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+```{r, eval=FALSE}
+# Lugsail
+# c= 1/2, r = 5
+
+# batch sizes 
+b <- seq(n^(.29), n^(0.55), 10)
+
+# compute lugsail batch means
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+starttime <- Sys.time()
+#lugsail5 <- mclapply(1:nchain, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bm", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bm", size=b[i]/5)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+#save(lugsail, file = "/home/deepak/Desktop/Rdata/lug.Rda")
+#load("/home/deepak/lest200.Rda")
+
+
+# Call them coming from Normal distribution ~ N(Sigma^2, 2*Sigma^4*b/n)
+# give each estimator a score coresponding to truth/estimated value.
+
+# Truth
+Sigma.true <- diag(Sigma)
+
+# Lugsail
+# Collect all the computed diagonal estimaors
+xx <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:nchain, function(i) diag(lugsail5[[i]][[j]])))))
+
+#score
+#univariate scoring rules
+scoreLugsail <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+scoreUni <- do.call(rbind, scoreLugsail)
+
+# Multivariate scoring rules
+scoreLugsailmulti <- lapply(1:length(b), function(i) es_sample(Sigma.true, dat = t(xx[[i]])))
+scoreMulti <- do.call(rbind, scoreLugsailmulti)
+
+#estimated b (component-wise)
+b.est.uni <- sapply(1:5, function(i) b[which.min(scoreUni[,i])])
+b.est.uni
+par(mfrow=c(2,3))
+plot(b, scoreUni[,1], type = "l")
+plot(b, scoreUni[,2], type = "l")
+plot(b, scoreUni[,3], type = "l")
+plot(b, scoreUni[,4], type = "l")
+plot(b, scoreUni[,5], type = "l")
+par(mfrow=c(1,1))
+
+#estimated b (Multi)
+b.est.multi <-b[which.min(scoreMulti)]
+plot(b, scoreMulti, type = "l")
+b.est.multi
+
+```
+
+
+
+
+
+# Extra
+
+```{r, eval=FALSE}
+#Correlation
+
+#only depends on relative batch size (square root)
+Var.V <- Sigma.true
+Corrij <- lapply(1:length(b.true), function(i) sapply(i:length(b.est), function(j) 
+  sqrt(min(b.est[i], b.est[j])/max(b.est[i], b.est[j]))))
+g <- matrix(0,p,p)
+g[lower.tri(g, diag=TRUE)] <- unlist(Corrij)
+R <- forceSymmetric(g, uplo = "L")
+
+# Transform into Covariance matrix
+Covarij <- round(sqrt(diag(Var.V))%*%R%*%sqrt(diag(Var.V)),4)
+
+# slight perturbation
+d <- 5
+obs_tmp <- Sigma.true + rnorm(d) %*% chol(Covarij)
+
+
+#estimated matrix
+Var.Vx <- xx[[1]][1,]
+Corrijx <- lapply(1:length(b.est), function(i) sapply(i:length(b.est), function(j) 
+  sqrt(min(b.est[i], b.est[j])/max(b.est[i], b.est[j]))))
+g <- matrix(0,p,p)
+g[lower.tri(g, diag=TRUE)] <- unlist(Corrij)
+R <- forceSymmetric(g, uplo = "L")
+
+# Transform into Covariance matrix
+Covarijx <- round(sqrt(diag(Var.Vx))%*%R%*%sqrt(diag(Var.Vx)),4)
+obs_tmpx <- as.matrix(Var.Vx) + rnorm(d) %*% chol(Covarijx)
+
+
+# score
+score <- sapply(1:length(b), function(i) es_sample(y = Sigma.true, dat = t(data.frame(xx[[i]])))) # dat has to be a matrix, a repication (same batch size estimator computation, a row matrix)
+
+
+plot(b, score, type = "l")
+
+
+```
+
+
+```{r, eval=FALSE}
+n <- 1e5
+p <- 5
+omega <- diag(p)
+
+#latest paper conditions
+A <- matrix(rnorm(p*p,mean=0,sd=1), p, p)
+B <- A%*%t(A)
+m <- max(eigen(B)$values)
+phi0 <- B/(m+0.001)
+phi <- bdiag(0.90*phi0)
+
+#population covariance
+scratch <- diag((p)^2) - kronecker(phi,phi)
+V.s <- solve(scratch)%*%vec(diag(p))
+V <- matrix(V.s, nrow = p, byrow = TRUE)
+Sigma <- solve(diag(p)-phi)%*%V + V%*%solve(diag(p)-phi) -V
+Tau.1 <- (solve(diag(p) - phi))^2%*%phi%*%V
+Tau.2 <- V%*%t(phi)%*%(solve(diag(p)-t(phi)))^2
+Tau <- -(Tau.1 + Tau.2)
+
+#Markov Chain
+nchain <- 200
+chain <- mclapply(1:nchain, function(i) as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = n)), mc.preschedule = TRUE, mc.cores = 6)
+
+
+# batch sizes 
+b <- seq(n^(.32), n^(0.52), 10)
+
+lugsail1 <- mclapply(1:200, function(j)  lapply(1:length(b), function(i) 2*mcse.multi(chain[[j]], method = "bartlett", size=b[i])[[1]] - mcse.multi(chain[[j]], method = "bartlett", size=b[i]/2)[[1]]),  mc.preschedule = TRUE, mc.cores = 6)
+
+
+# all coming from lugsail batch means with varying batch sizes. Call them coming from Normal distribution ~ N(Sigma^2, 2Sigma^4*b/n)
+
+# give each a score coresponding to truth/estimated value.
+
+# work with lugsail[[1]]
+
+# score
+Sigma.true1 <- diag(Sigma)
+
+xx1 <- lapply(1: length(b), function(j) data.frame(do.call(rbind, lapply(1:200, function(i) diag(lugsail[[i]][[j]])))))
+
+#score
+score1 <- lapply(1:length(b), function(i) crps_sample(Sigma.true, dat = t(xx[[i]])))
+
+#univariate scoring rules
+scorexx1 <- do.call(rbind, score)
+
+#b.coef.true <- sapply(1:(p), function(i) ((diag(Tau)[i]^2)/(diag(Sigma)[i]^2))^(1/3))
+#b.true <- b.coef.true*n^(1/3)
+
+#estimated b
+b.est1 <- sapply(1:5, function(i) b[which.min(scorexx[,i])])
+
+#multivariate scaling
+# Make a covariance matrix
+
+# score
+score <- sapply(1:length(b), function(i) es_sample(y = Sigma.true1, dat = t(data.frame(xx1[[i]])))) # dat has to be a matrix, a repication (same batch size estimator computation, a row matrix)
+
+
+plot(b, score, type = "l")
+
+```

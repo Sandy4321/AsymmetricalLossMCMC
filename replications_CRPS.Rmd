@@ -1,0 +1,104 @@
+---
+title: "Number of chains"
+author: "Deepak Bastola"
+date: "May 11, 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+library(mcmcse)
+library(parallel)
+library(scoringRules)
+
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n=1, mean = 0, sd = 1)}
+  vec
+}
+```
+
+
+```{r, eval=FALSE}
+noofchains <- function(n, phi, m) {
+
+sigma.true <- 1/(1-phi)^2
+out <- lapply(1:m, function(i) ar1sim(n, phi))
+#V <- sapply(1:m, function(i) mcse(out[[i]], method = "bm", size = b)$se^2*n)
+
+# replicated batch means
+# batch size b
+b <- n^(1/2)
+a <- floor(n/b)
+mu.hat = mean(unlist(out))
+y = lapply(1:m, function(j) sapply(1:a, function(k) return(mean(out[[j]][((k - 1) * b + 1):(k * b)]))))
+tau.b <- b/(a*m-1)*sum(sapply(1:m, function(i) sum((y[[i]] - mu.hat)^2)))
+
+# batch size b/3
+b <- floor(b/3)
+a = floor(n/b)
+
+y3 = lapply(1:m, function(j) sapply(1:a, function(k) return(mean(out[[j]][((k - 1) * b + 1):(k * b)]))))
+tau.b3 <- b/(a*m-1)*sum(sapply(1:m, function(i) sum((y3[[i]] - mu.hat)^2)))
+# replicated lugsail
+tau.hat <- 2*tau.b - tau.b3
+varchain <- mean(sapply(1:m, function(i) var(out[[i]])))
+
+#gelman rubin modified
+sigma.L <- ((n-1)/n)*varchain + tau.hat/n
+
+return(c(sqrt(sigma.L/varchain), sigma.L, tau.hat))
+}
+
+# Simulation Study
+nrep = 200
+starttime <- Sys.time()
+simE <- mclapply(1:50, function(j) sapply(1:nrep, function(i) noofchains(5e4,0.95,j)),
+                 mc.preschedule = TRUE, mc.cores = 6)
+simF <- mclapply(1:50, function(j) sapply(1:nrep, function(i) noofchains(1e4,0.95,j)), 
+                 mc.preschedule = TRUE, mc.cores = 6)
+simG <- mclapply(1:50, function(j) sapply(1:nrep, function(i) noofchains(1e5,0.95,j)),
+                 mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+
+```
+
+```{r}
+
+# save data
+#save(simE, file = "/home/deepak/Desktop/Rdata/rbm5e4.Rda")
+load(file = "/home/deepak/Desktop/Rdata/rbm5e4.Rda")
+#save(simF, file = "/home/deepak/Desktop/Rdata/rbm1e4.Rda")
+load(file = "/home/deepak/Desktop/Rdata/rbm1e4.Rda")
+
+#save(simG, file = "/home/deepak/Desktop/Rdata/rbm1e5.Rda")
+
+# scoring
+scoresE <- sapply(1:50, function(i) crps_sample(400, simE[[i]][3,]))
+plot(scoresE, type = "l", xlab = "m", ylab = "Scores", main = "n = 5e4")
+
+scoresF <- sapply(1:50, function(i) crps_sample(400, simF[[i]][3,]))
+plot(scoresF, type = "l", xlab = "m", ylab = "Scores", main = "n=1e4")
+
+R.hat.5e4 <- sapply(1:50, function(i) Reduce('+', simE[[i]][1,])/200)
+plot(R.hat.5e4, type = "l", ylab = "R.hat", xlab = "m", main = "n = 5e4")
+
+R.hat.1e4 <- sapply(1:50, function(i) Reduce('+', simF[[i]][1,])/200)
+plot(R.hat.1e4, type = "l", ylab = "R.hat", xlab = "m", main = "n = 1e4")
+
+# 
+load(file = "/home/deepak/Desktop/Rdata/rbm5e495.Rda")
+load(file = "/home/deepak/Desktop/Rdata/rbm1e595.Rda")
+
+scores1 <- sapply(1:25, function(i) crps_sample(400, sim1[[i]]))
+plot(scores1, type = "l", xlab = "m", ylab = "Scores", main = "n = 5e4 (250 replications)")
+
+
+scores2 <- sapply(1:10, function(i) crps_sample(400, sim2[[i]]))
+plot(scores2, type = "l", xlab = "m", ylab = "Scores", main = "n = 1e5 (1000 replications)")
+
+
+```

@@ -1,0 +1,571 @@
+---
+title: "GSS_codes"
+author: "Deepak Bastola"
+date: "May 22, 2020"
+header-includes:
+   - \usepackage{bbm}
+output: html_document
+---
+
+```{r}
+# Coverage probabilities
+# Univariate
+
+library(mAr)
+library(mcmcse)
+library(matrixcalc)
+library(mAr)
+library(mcmcse)
+library(matrixcalc)
+library(parallel)
+library(mvtnorm)
+library(Matrix)
+
+
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n = 1, mean = 0, sd = 1)}
+  vec
+}
+
+phi <- 0.95
+
+chain <- ar1sim(n, phi)
+
+load(file = "/home/deepak/Desktop/Rdata/chainbig1.Rda")
+load(file = "/home/deepak/Desktop/Rdata/Phibig1.Rda")
+
+
+
+sigma.bm1 <- lapply(1:1000, function(i) mcse.multi(chain_big1[[1]][[i]], method = "bm", size="sqroot")[[1]])
+diags <- lapply( 1:5, function(j) sapply(1:1000, function(i) diag(sigma.bm1[[i]])[j]))
+sigma.true <- sapply(1:5, function(j) diag(sim.phi[[1]][[2]])[j])
+
+# univariate linex loss
+c = -1.5
+k = 1
+linex <- sapply(1:5, function(i) lapply(1:1000, function(j) k*(exp(c*(diags[[i]][j] - sigma.true[[i]]))-c*(diags[[i]][j] - sigma.true[[i]]) -1)))
+minlinex <- sapply(1:5, function(i) diags[[i]][which.min(linex[,i])])
+sigma.true.1
+
+#MSE
+
+mse <- sapply(1:5, function(i) lapply(1:1000, function(j) (diags[[i]][j] - sigma.true[[i]])^2))
+minmse <- sapply(1:5, function(i) diags[[i]][which.min(mse[,i])])
+plot(y=linex, x= diags1, type = "p", cex = .2)
+
+
+```
+
+
+```{r}
+sigma.bm2 <- lapply(1:1000, function(i) mcse.multi(chain_big1[[2]][[i]], method = "bm", size="sqroot")[[1]])
+diags <- lapply(1:5, function(j) sapply(1:1000, function(i) diag(sigma.bm2[[i]])[j]))
+sigma.true <- sapply(1:5, function(j) diag(sim.phi[[2]][[2]])[j])
+
+# univariate linex loss
+c = -1.5
+k = 1
+linex <- sapply(1:5, function(i) lapply(1:1000, function(j) k*(exp(c*(diags[[i]][j] - sigma.true[[i]]))-c*(diags[[i]][j] - sigma.true[[i]]) -1)))
+minlinex <- sapply(1:5, function(i) diags[[i]][which.min(linex[,i])])
+
+#MSE
+
+mse <- sapply(1:5, function(i) lapply(1:1000, function(j) (diags[[i]][j] - sigma.true[[i]])^2))
+minmse <- sapply(1:5, function(i) diags[[i]][which.min(mse[,i])])
+
+#plot(y=linex, x= diags1, type = "p", cex = .2)
+
+```
+
+
+```{r}
+sigma.bm6 <- lapply(1:1000, function(i) mcse.multi(chain_big1[[6]][[i]], method = "bm", size="sqroot")[[1]])
+diags <- lapply(1:5, function(j) sapply(1:1000, function(i) diag(sigma.bm6[[i]])[j]))
+sigma.true <- sapply(1:5, function(j) diag(sim.phi[[6]][[2]])[j])
+
+# univariate linex loss
+c = -1.5
+k = 1
+linex <- sapply(1:5, function(i) lapply(1:1000, function(j) k*(exp(c*(diags[[i]][j] - sigma.true[[i]]))-c*(diags[[i]][j] - sigma.true[[i]]) -1)))
+minlinex <- sapply(1:5, function(i) diags[[i]][which.min(linex[,i])])
+
+#MSE
+
+mse <- sapply(1:5, function(i) lapply(1:1000, function(j) (diags[[i]][j] - sigma.true[[i]])^2))
+minmse <- sapply(1:5, function(i) diags[[i]][which.min(mse[,i])])
+
+
+
+```
+
+
+```{r}
+library(parallel)
+library(latex2exp)
+
+check <- function(tau, bias) {(tau - ifelse(bias < 0, 1, 0))*bias}
+stein <- function(d, theta) (d/theta) - log(d/theta) -1
+
+scaling <- function(n){
+k <- seq(-25,25,.1)
+xi <- rnorm(n, mean = 3, sd = 3)
+s2 <- lapply(1:length(k), function(i) (1/(n-k[i]))*sum((xi - mean(xi))^2))
+return(s2)
+}
+
+k <- seq(-25,25,.1)
+nrep <- 5000
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+xx <- mclapply(1:nrep, function(i) unlist(scaling(1000)), mc.preschedule = TRUE, mc.cores = 4)
+
+#save(xx, file = "/home/deepak/Desktop/Research/MyDissertation/Codes-Research/chain_presenation.Rda")
+
+
+# MSE Loss
+MSE.loss <- lapply(1:nrep, function(i) (xx[[i]] - 9)^2)
+MSE.avg <- colMeans(do.call(rbind, MSE.loss))
+
+a <- k[which.min(MSE.avg)]
+
+pdf("MSE_coefaa.pdf")
+plot(k, MSE.avg, type = "l", ylab = "MSE Loss", xlab = "k", main = "MSE Loss for different scaling coefficients")
+abline(v = a, col = "red")
+text(0,.17,expression(k[opt] == -0.3))
+dev.off()
+
+
+# c for unbiased coefficient 1/(n-1)
+# k = 1
+
+c.seq <- -seq(-0.005,0.2, 0.001)
+
+# LINEX Loss
+
+LINEX.loss <- lapply(1:length(c.seq), function(j) lapply(1:nrep, function(i) exp(c.seq[j]*(xx[[i]] - 9)) -c.seq[j]*(xx[[i]] - 9) -1))
+LINEX.avg <- lapply(1:length(c.seq), function(j) colMeans(do.call(rbind, LINEX.loss[[j]])))
+k.min <- sapply(1:length(c.seq), function(i) k[which.min(LINEX.avg[[i]])])
+c.unbiased <- c.seq[k.min==1] 
+
+c <- -0.15
+LINEX.l <-  lapply(1:nrep, function(i) exp(c*(xx[[i]] - 9)) -c*(xx[[i]] - 9) -1)
+LINEX.meanun <- colMeans(do.call(rbind, LINEX.l))
+
+
+# LINEX biased
+c <- c(-1.0,-0.15,1.0) 
+LINEX.l <-  lapply(1:3, function(j) lapply(1:nrep, function(i) exp(c[j]*(xx[[i]] - 9)) -c[j]*(xx[[i]] - 9) -1))
+LINEX.mean <- lapply(1:3, function(j) colMeans(do.call(rbind, LINEX.l[[j]])))
+
+k1 <- k[which.min(LINEX.mean[[1]])]
+k2 <- k[which.min(LINEX.mean[[3]])]
+
+# LINEX biased
+pdf("LINEX_demo.pdf")
+plot(k, LINEX.mean[[1]], type = "l",main = "LINEX loss for biased variance estimators", xlab = TeX(' k in \t $\\frac{1}{n-k}$'), ylab = "LINEX Loss" , col = "blue", ylim = c(0.07,0.125))
+lines(k, LINEX.mean[[3]], col ="red")
+abline(v =k1, col = "green", lty = 2)
+abline(v =k2, col = "green", lty = 2)
+legend("center", legend = c("c = -1","c = +1"), lty = c(1,1), col= c("blue", "red"))
+dev.off()
+
+#LINEX unbiased
+pdf("LINEX_unbiased.pdf")
+plot(k, LINEX.meanun, type = "l", main = "LINEX loss for unbiased estimators", xlab = TeX(' k in \t $\\frac{1}{n-k}$'), ylab = "LINEX Loss")
+abline(v =1, col = "red", lty = 2)
+text(-5, 0.0020 , expression(c[opt] == -0.15))
+dev.off()
+
+c <- 1.0
+LINEX.l <-  lapply(1:nrep, function(i) exp(c*(xx[[i]] - 9)) -c*(xx[[i]] - 9) -1)
+LINEX.mean2 <- colMeans(do.call(rbind, LINEX.l))
+
+# LINEX unbiased
+plot(k, LINEX.mean[[2]], type = "l")
+
+# stein unbiased
+theta <- 9
+STEIN.e <- lapply(1:nrep, function(i) (xx[[i]]/theta) - log(xx[[i]]/theta) -1)
+STEIN.mean <- colMeans(do.call(rbind, STEIN.e))
+
+
+k.stein <- k[which.min(STEIN.mean)]
+
+pdfFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/stein-opt.pdf")
+pdf(pdfFile)
+plot(k,STEIN.mean, type = "l", xlab = TeX(' k in \t $\\frac{1}{n-k}$'), ylab = "STEIN Loss", main = "STEIN Loss vs Coefficients")
+abline(v=k.stein, col="green", lty = 2)
+dev.off()
+
+
+# CHECK Loss
+tau <- seq(0.35, 0.6, 0.001)
+
+CHECK.loss <- lapply(1:length(tau), function(j) lapply(1:nrep, function(i) check(tau[j],(xx[[i]] - 9)) ))
+CHECK.avg <- lapply(1:length(tau), function(j) colMeans(do.call(rbind, CHECK.loss[[j]])))
+k.min.ch <- sapply(1:length(tau), function(i) k[which.min(CHECK.avg[[i]])])
+tau.unbiased <- tau[k.min.ch==1]
+
+
+tau = 0.60
+check.1 <- lapply(1:nrep, function(i) check(tau,(xx[[i]] - 9)))
+check.avg1 <- colMeans(do.call(rbind, check.1))
+#plot(k, check.avg1, type = "l")
+
+tau = 0.40
+check.2 <- lapply(1:nrep, function(i) check(tau,(xx[[i]] - 9)))
+check.avg2 <- colMeans(do.call(rbind, check.2))
+#plot(k, check.avg2, type = "l")
+
+tau = 0.50
+check.3 <- lapply(1:nrep, function(i) check(tau,(xx[[i]] - 9)))
+check.avg3 <- colMeans(do.call(rbind, check.3))
+#plot(k, check.avg3, type = "l")
+
+a1 <- k[which.min(check.avg1)]
+a2 <- k[which.min(check.avg2)]
+a3 <- k[which.min(check.avg3)]
+
+
+pdfFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/checknew.pdf")
+pdf(pdfFile)
+plot(k, check.avg1, type = "l", col = "blue", main = "Check loss Vs Coefficients", xlab = TeX(' k in \t $\\frac{1}{n-k}$'), ylim = c(0.15,0.20), ylab = "Check Loss")
+lines(k, check.avg3, type = "l", col = "red")
+lines(k, check.avg2, type = "l", col = "magenta")
+abline(v =a1, col = "green", lty = 2)
+abline(v =a3, col = "green", lty = 2)
+abline(v =a2, col = "green", lty = 2)
+legend("center", legend = c(TeX('$\\tau = 0.60$'), TeX('$\\tau = 0.50$'), TeX('$\\tau = 0.40$')), lty = c(1,1,1), col= c("blue", "red", "magenta"))
+dev.off()
+
+
+```
+
+```{r}
+# check loss
+check <- function(tau, bias) {(tau - ifelse(bias < 0, 1, 0))*bias}
+quadquad <- function(tau, bias) {(tau - (2*tau -1)*ifelse(bias < 0, 1, 0))*bias^2}
+f.linex <- function(x,c,b, theta) (exp(c*(x-theta)) -c*(x-theta) -1)/b
+stein <- function(d, theta) (d/theta) - log(d/theta) -1
+
+
+#curve(f, 1,4)
+
+# construct estimators
+est <- function(k,n){
+xi <- rnorm(n, mean = 3, sd = 3)
+s2 <- (1/(n-k))*sum((xi - mean(xi))^2)
+return(s2)
+}
+
+nrep <- 5000
+check1 <- sapply(1:nrep, function(i) est(a1, 1000))
+chkloss1 <- check(0.60, check1 - 9)
+
+check2 <- sapply(1:nrep, function(i) est(a2, 1000))
+chkloss2 <- check(0.40, check2 - 9)
+
+check3 <- sapply(1:nrep, function(i) est(a3, 1000))
+chkloss3 <- check(0.40, check2 - 9)
+
+
+pdf("checkcomp.pdf")
+plot(check1, chkloss1, type = "p", cex = 0.2, col = "red", main = "Check loss for biased estimators", xlab = TeX('$\\hat{\\sigma}^2$'), ylab = "Check Loss")
+points(check2, chkloss2, type = "p", cex = 0.2, col ="blue")
+legend("center", legend = c(TeX('$\\tau = 0.60$'), TeX('$\\tau = 0.40$')), lty = c(1,1), col= c("red", "blue"))
+dev.off()
+
+quad1 <- sapply(1:nrep, function(i) est(-10, 1000))
+quadloss1 <- quadquad(0.60, quad1 - 9)
+plot(quad1, quadloss1)
+
+quad2 <- sapply(1:nrep, function(i) est(+10, 1000))
+quadloss2 <- quadquad(0.40, quad2 - 9)
+plot(quad2, quadloss2)
+
+pdf("quadcomp.pdf")
+plot(quad1, quadloss1, type = "p", cex = 0.2, col = "red", main = "QuadQuad loss for biased estimators", xlab = TeX('$\\hat{\\sigma}^2$'), ylab = "QuadQuad Loss")
+points(quad2, quadloss2, type = "p", cex = 0.2, col ="blue")
+legend("center", legend = c(TeX('$\\tau = 0.60$'), TeX('$\\tau = 0.40$')), lty = c(1,1), col= c("red", "blue"))
+dev.off()
+
+
+
+```
+
+```{r}
+#function to calculate batch means univariate
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- rnorm(1,0,1/2)
+  #vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n = 1, mean = 0, sd = 1)}
+  vec
+}
+
+
+ubm <- function(out, b){
+n <- length(out)
+a <- floor(n/b)
+#overall mean
+y.bar <- mean(out)
+#batches and batch means
+y = sapply(1:a, function(k) return(mean(out[((k - 1) * b + 1):(k * b)])))
+sigma = b * sum((y - y.bar)^2)/(a - 1)
+sigma 
+}
+
+n <- 1e5
+phi <- 0.95
+b <- sqrt(n)
+sigma.true <- 1/(1-phi)^2
+var.true <- 2*sigma.true^2*b/n
+#load(file = "/home/deepak/Desktop/Rdata/chainbig1.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/Phibig1.Rda")
+#chain <- chain_big1[[6]]
+
+library(parallel)
+#sim1 <- mclapply(1:5000, function(i) ar1sim(n,phi), mc.preschedule = TRUE, mc.cores = 4)
+#save(sim1, file = "/home/deepak/Desktop/Rdata/bigunivariate.Rda")
+load(file = "/home/deepak/Desktop/Rdata/bigunivariate.Rda")
+
+n <- 1e5
+phi <- 0.80
+#sim2 <- mclapply(1:5000, function(i) tryCatch(ar1sim(n,phi), error = function(e) return(NA)), mc.preschedule = TRUE, mc.cores = 6)
+
+#save(sim2, file = "/home/deepak/Desktop/Rdata/bigunivariate80.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/bigunivariate80.Rda")
+
+n <- 1e5
+b <- seq(n^{1/3},n^{7/12}, 20)
+start <- Sys.time()
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+sigmab1 <- mclapply(1:length(b), function(j) sapply(1:5000, function(i) ubm(sim1[[i]], b[j])), mc.preschedule = TRUE, mc.cores = 2)
+#save(sigmann, file = "/home/deepak/Desktop/Rdata/sigmahist.Rda")
+save(sigmab1, file = "/home/deepak/Desktop/Rdata/sigmab1new.Rda")
+load(file = "/home/deepak/Desktop/Rdata/sigmab1new.Rda")
+
+b <- sqrt(n)
+sigma.true <- 1/(1-phi)^2
+var.true <- 2*sigma.true^2*b/n
+sigmab2 <- lapply(1:length(b), function(j) sapply(1:5000, function(i) ubm(sim2[[i]], b[j])))
+#save(sigmann, file = "/home/deepak/Desktop/Rdata/sigmahist.Rda")
+#save(sigmab2, file = "/home/deepak/Desktop/Rdata/sigmab2.Rda")
+load(file = "/home/deepak/Desktop/Rdata/sigmab2.Rda")
+
+end <- Sys.time()
+start - end
+
+#load(file = "/home/deepak/Desktop/Rdata/sigmab.Rda")
+
+```
+
+```{r}
+# DSS plots
+library(scoringRules)
+# phi = 0.80
+n <- 1e5
+b <- seq(n^{5/12},n^{2/3}, 20)
+b <- seq(n^{1/3},n^{7/12}, 20)
+m1 <- seq(1, 1.4, 0.01)
+sigma.scaled1 <- lapply(1:length(b), function(j) lapply(1:length(m1), function(i) m1[i]*sigmab1[[j]]))
+sigma.scaled2 <- lapply(1:length(b), function(j) lapply(1:length(m1), function(i) m1[i]*sigmab2[[j]]))
+
+
+logscore1 <- lapply(1:length(b), function(i) sapply(1: length(m1), function(j) logs_sample(400,sigma.scaled1[[i]][[j]])))
+logscore2 <- lapply(1:length(b), function(i) sapply(1: length(m1), function(j) logs_sample(25,sigma.scaled2[[i]][[j]])))
+
+mim_m <- sapply(1:length(b), function(i) m1[which.min(logscore1[[i]])])
+mim_m2 <- sapply(1:length(b), function(i) m1[which.min(logscore2[[i]])])
+
+pdfFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/mVsb.pdf")
+pdf(pdfFile)
+par(mfrow= c(1,2))
+plot(b, mim_m , type = "l", col = "blue", xlab = "b", ylab = "DSS Score", main = "phi = 0.95")
+plot(b, mim_m2, type = "l", col = "blue", xlab = "b", ylab = "DSS Score", main = "phi = 0.80")
+par(mfrow=c(1,1))
+dev.off()
+
+# plot of DSS vs m
+
+pdfFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/DSSVsm.pdf")
+pdf(pdfFile)
+plot(m1, logscore1[[15]], type = "l", main = "DSS score Vs m", xlab = "m", ylab = "DSS score")
+dev.off()
+
+
+```
+
+
+
+```{r}
+# variability
+mu.sigma <- sapply(1:length(b), function(i) mean(sigmab[[i]]))
+var.sigma <- sapply(1:length(b), function(i) 2*mu.sigma[[i]]^2*b[i]/n)
+
+# optimal estimator
+# DSS score
+
+m1 <- seq(0.8, 1.9, 0.01)
+sigma.scaled <- lapply(1:length(b), function(j) lapply(1:length(m1), function(i) m1[i]*sigmab[[j]]))
+library(scoringRules)
+
+
+logscore1 <- sapply(1: length(m1), function(j) logs_sample(400,sigma.scaled[[1]][[j]]))
+logscore2 <- sapply(1: length(m1), function(j) logs_sample(400,sigma.scaled[[2]][[j]]))
+logscore3 <- sapply(1: length(m1), function(j) logs_sample(400,sigma.scaled[[3]][[j]]))
+logscore4 <- sapply(1: length(m1), function(j) logs_sample(400,sigma.scaled[[4]][[j]]))
+
+plot(m1, logscore1, type = "l")
+
+# check loss
+m <- 1.12
+ehat <- m*sigmann - 400
+mu.ehat <- mean(ehat)
+e.quant <- mcmcse::mcse.q(ehat, 0.30)[1]
+sigma.opt <- mu.sigma/m + mu.sigma * sqrt(2*b/n)* e.quant$est
+sigma.opt
+
+# push each estimator
+sigma.pushed <- sapply(1:5000, function(i) sigmann[i]/m + sigmann[i] * sqrt(2*b/n)* e.quant$est)
+
+
+pdf("pushed.pdf")
+set.seed(42)
+p1 <- data.frame(sigmann)
+p1 <- unname(p1)
+p2 <- data.frame(sigma.pushed)
+p2 <- unname(p2)
+p1$veg <- 'carrot'
+p2$veg <- 'cuke'
+vegLength <- rbind(p1, p2)
+ggplot(vegLength, aes(length, fill = veg)) + geom_density(alpha = 0.2)
+dev.off()
+
+# plot of check loss
+check <- function(tau, bias) {(tau - ifelse(bias < 0, 1, 0))*bias}
+
+chkloss1 <- check(0.40, sigmann - 400)
+chkloss2 <- check(0.40, ehat )
+
+pdf("twohist.pdf")
+hist(sigmann, col='blue', xlab = "estimators", main = "Histogram of BM estimators")
+hist(sigma.pushed, col="red", add=T)
+dev.off()
+
+# quad-quad loss
+m <- 1.001
+tau = 0.40
+ehat <- m*sigmann - 400
+mu.ehat <- mean(ehat)
+sigma.ehat <- sqrt(2*m**2*mu.sigma**2*b/n)  
+
+sigma.opt <- (1/m)*(mu.sigma - ((2*tau -1)/tau)*sigma.ehat*dnorm(-mu.ehat/sigma.ehat))
+sigma.opt
+
+# Stein's Loss
+
+# optimal estimator Lugsail
+
+sigmalug <- sapply(1:5000, function(i) 2*ubm(sim1[[i]], b) - ubm(sim1[[i]], b/3))
+save(sigmalug, file = "/home/deepak/Desktop/Rdata/sigmalughist.Rda")
+
+
+# variability
+mu.sigma.lug <- mean(sigmalug)
+var.sigma.lug <- 2*3*mu.sigma.lug^2*b/n
+
+
+# optimal estimator
+# variability will change for lugsail.
+# check loss
+
+#1
+m <- 1.12
+ehat.lug <- m*sigmalug - 400
+mu.ehat.lug <- mean(ehat.lug)
+e.quant.lug <- mcmcse::mcse.q(ehat.lug, 0.10)[1]
+sigma.opt.lug <- mu.sigma.lug/m + mu.sigma.lug * sqrt(2*5*b/n)* e.quant.lug$est
+sigma.opt.lug
+
+# push each estimator
+sigmalug.pushed <- sapply(1:5000, function(i) sigmalug[i]/m + sigmalug[i] * sqrt(2*5*b/n)* e.quant.lug$est)
+
+
+hist(sigmalug, col='blue', xlab = "estimators", main = "Histogram of Lugsail estimators")
+hist(sigmalug.pushed, col="red", add=T)
+
+
+#2
+m <- 0.98
+
+
+# Quad-Quad
+m <- 1.05
+tau = 0.54
+ehat_lug <- m*sigmalug - 400
+mu.ehat_lug <- mean(ehat_lug)
+sigma.ehat_lug <- sqrt(2*m**2*3*mu.sigma.lug**2*b/n)  
+
+sigma.opt.qlug <- (1/m)*(mu.sigma.lug - ((2*tau -1)/tau)*sigma.ehat_lug*dnorm(-mu.ehat_lug/sigma.ehat_lug))
+sigma.opt.qlug
+
+
+```
+
+```{r}
+# make quantile plot (side-by-side)
+
+set.seed(3000)
+xseq <- seq(-4,4,.01)
+densities <- dnorm(xseq, 0,1)
+cumulative <- pnorm(xseq, 0, 1)
+randomdeviates<-rnorm(1000,0,1)
+
+# plots
+
+pdfFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/CDF.pdf")
+pdf(pdfFile)
+par(mfrow= c(1,2))
+plot(xseq, cumulative, type = "l", xlab = "x", ylab = "F(x)")
+segments(x0=1, y0=0, x1=1, y1 = pnorm(1), col = "red")
+segments(x0=-4, y0=pnorm(1), x1=1, y1 = pnorm(1), col ="red")
+plot(cumulative, xseq, type = "l", ylab = c(TeX('Q($\\tau$)')), xlab = c(TeX('$\\tau$')) )
+segments(x0=pnorm(1), y0=-4, x1=pnorm(1), y1 = 1, col = "blue")
+segments(x0=0, y0=1, x1=pnorm(1), y1 = 1, col ="blue")
+par(mfrow=c(1,1))
+dev.off()
+
+
+plot(cumulative, xseq, type = "l", ylab = c(TeX('Q($\\tau$)')), xlab = c(TeX('$\\tau$')) )
+
+
+```
+
+
+```{r}
+# make plot
+#Random numbers
+h2<-rnorm(1000,4)
+h1<-rnorm(1000,6)
+
+# Histogram Grey Color
+cairo_ps(file = "test.eps", onefile = FALSE, fallback_resolution = 600)
+hist(h1, col=rgb(0.1,0.1,0.1,0.5),xlim=c(0,10), ylim=c(0,200), main="Overlapping Histogram")
+hist(h2, col=rgb(0.8,0.8,0.8,0.5), add=T)
+box()
+dev.off()
+
+options(bitmapType="cairo")
+pngFile <-c("/home/deepak/Desktop/Research/MyDissertation/Codes-Research/hist.png")
+png(filename = pngFile, bg = "transparent", type = c("cairo"), width=2000, height=2000, res=300)
+hist(h1, col="red")
+hist(h2, col="blue", add=T)
+dev.off()
+
+```
+
+
+
+

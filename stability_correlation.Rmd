@@ -1,0 +1,245 @@
+---
+title: "stability_correlation"
+author: "Deepak Bastola"
+date: "May 15, 2020"
+output: html_document
+---
+
+
+```{r}
+library(mcmcse)
+library(Matrix)
+library(matrixcalc)
+library(mAr)
+library(scoringRules)
+library(parallel)
+
+# Correlation Setup
+
+var.mat <- function(n,p,c){
+
+omega <- diag(p)
+
+#latest paper conditions
+A <- matrix(rnorm(p*p,mean=0,sd=1), p, p)
+B <- A%*%t(A)
+m <- max(eigen(B)$values)
+phi0 <- B/(m + 0.1)
+
+phi <- bdiag(c*phi0) + diag(0.1,p)
+
+#population covariance
+scratch <- diag((p)^2) - kronecker(phi,phi)
+V.s <- solve(scratch)%*%vec(diag(p))
+V <- matrix(V.s, nrow = p, byrow = TRUE)
+Sigma <- solve(diag(p)-phi)%*%V + V%*%solve(diag(p)-phi) -V
+Tau.1 <- (solve(diag(p) - phi))^2%*%phi%*%V
+Tau.2 <- V%*%t(phi)%*%(solve(diag(p)-t(phi)))^2
+Tau <- -(Tau.1 + Tau.2)
+Corr <- cov2cor(Sigma)
+dep <- max(eigen(Corr)$values)
+return(list(phi, Sigma, dep))
+}
+
+
+
+
+```
+
+
+
+```{r}
+
+n <- 5e4
+p <- 5
+omega <- diag(p)
+
+#latest paper conditions
+A <- matrix(rnorm(p*p,mean=0,sd=1), p, p)
+B <- A%*%t(A)
+m <- max(eigen(B)$values)
+phi0 <- B/(m+0.001)
+
+phi <- bdiag(0.05*phi0) + diag(0.7,p)
+
+#population covariance
+scratch <- diag((p)^2) - kronecker(phi,phi)
+V.s <- solve(scratch)%*%vec(diag(p))
+V <- matrix(V.s, nrow = p, byrow = TRUE)
+Sigma <- solve(diag(p)-phi)%*%V + V%*%solve(diag(p)-phi) -V
+Tau.1 <- (solve(diag(p) - phi))^2%*%phi%*%V
+Tau.2 <- V%*%t(phi)%*%(solve(diag(p)-t(phi)))^2
+Tau <- -(Tau.1 + Tau.2)
+
+
+```
+
+
+```{r}
+#Markov Chain
+nchain <- 1000
+
+c <- seq(0.05, 0.95, 0.15)
+n <- 2e4
+p = 5
+sim.phi <- lapply(1:length(c), function(i) var.mat(n=n, p=p, c[i]))
+
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+starttime <- Sys.time()
+chain_big1 <- mclapply(1:length(c), function(j) lapply(1:1000, function(i) tryCatch(as.matrix(mAr.sim(rep(0,p), as.matrix(sim.phi[[j]][[1]]), diag(p), N = n)), error = function(e) NULL)), mc.preschedule = TRUE, mc.cores = 4)
+#chain2e4 <- mclapply(1:nchain, function(i) as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = 2e4)), mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+save(chain_big1, file = "/home/deepak/Desktop/Rdata/chainbig1.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/chainbig1.Rda")
+
+save(sim.phi, file = "/home/deepak/Desktop/Rdata/Phibig1.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/Phibig1.Rda")
+
+n <- 2e4
+Sigmas <- lapply(1:length(c), function(i) sim.phi[[i]][[2]])
+
+# batch sizes 
+b <- seq(n^(.29), n^(0.58), 2)
+
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+bm_multi1 <- lapply(1:length(c), function(k) mclapply(1:1000, function(j) lapply(1:length(b), function(i) mcse.multi(chain_big1[[k]][[j]], method = "bm", size=b[i])[[1]]), mc.preschedule = TRUE, mc.cores = 4))
+
+# diagonals
+Sigma.diagtrue1 <- lapply(1:length(c), function(i) diag(Sigmas[[i]]))
+corr.offdiagtrue1 <- cov2cor(Sigma1)[lower.tri(cov2cor(Sigma1))]
+# Collect all the computed diagonal estimaors
+diag1 <- lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) diag(bm_multi1[[i]][[j]])))))
+
+# Collect all the computed off-diagonal estimators as vectors
+corr1 <- lapply(1:2000, function(j) lapply(1:length(b), function(i) cov2cor(bm_multi1[[j]][[i]])))
+corrvec1 <-  lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) corr1[[i]][[j]][lower.tri(corr1[[i]][[j]])]))))
+
+#scoremultidiag1 <- lapply(1:length(chain_big1), function(i) es_sample(Sigma.true1, dat = t(bm_multi1[[i]])))
+scoremultidiag1 <- sapply(1:length(b), function(i) es_sample(Sigma.diagtrue1, dat = t(diag1[[i]])))
+scoremultioffdiag1 <- sapply(1:length(b), function(i) es_sample(corr.offdiagtrue1, dat = t(corrvec1[[i]])))
+#c(scoremultidiag1,scoremultioffdiag1)
+
+
+```
+
+
+```{r}
+library(mcmcse)
+library(Matrix)
+library(matrixcalc)
+library(mAr)
+library(scoringRules)
+library(parallel)
+
+n <- 5e4
+p <- 5
+omega <- diag(p)
+
+#latest paper conditions
+A <- matrix(rnorm(p*p,mean=0,sd=1), p, p)
+B <- A%*%t(A)
+m <- max(eigen(B)$values)
+phi0 <- B/(m+0.001)
+
+phi <- bdiag(0.95*phi0) + diag(0.3,p)
+
+#population covariance
+scratch <- diag((p)^2) - kronecker(phi,phi)
+V.s <- solve(scratch)%*%vec(diag(p))
+V <- matrix(V.s, nrow = p, byrow = TRUE)
+Sigma <- solve(diag(p)-phi)%*%V + V%*%solve(diag(p)-phi) -V
+Tau.1 <- (solve(diag(p) - phi))^2%*%phi%*%V
+Tau.2 <- V%*%t(phi)%*%(solve(diag(p)-t(phi)))^2
+Tau <- -(Tau.1 + Tau.2)
+Sigma
+cov2cor(Sigma)
+
+```
+
+
+```{r}
+#Markov Chain
+nchain <- 2000
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+starttime <- Sys.time()
+chain_big2 <- mclapply(1:nchain, function(i) tryCatch(as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = n)), error = function(e) NULL), 
+                       mc.preschedule = TRUE, mc.cores = 4)
+#chain2e4 <- mclapply(1:nchain, function(i) as.matrix(mAr.sim(rep(0,p), as.matrix(phi), omega, N = 2e4)), mc.preschedule = TRUE, mc.cores = 6)
+endtime <- Sys.time()
+endtime - starttime
+save(chain_big2, file = "/home/deepak/Desktop/Rdata/chainbig2.Rda")
+#save(chain, file = "/home/deepak/Desktop/Rdata/chain2e4.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/chain5e4.Rda")
+#load(file = "/home/deepak/Desktop/Rdata/chain2e4.Rda")
+
+save(Sigma, file = "/home/deepak/Desktop/Rdata/Sigmabig2.Rda")
+load(file = "/home/deepak/Desktop/Rdata/Sigmabig2.Rda")
+
+```
+
+```{r}
+load(file = "/home/deepak/Desktop/Rdata/Sigmabig1.Rda")
+load(file = "/home/deepak/Desktop/Rdata/chainbig1.Rda")
+n <- 5e4
+Sigma1 <- Sigma
+
+# batch sizes 
+b <- seq(n^(.3), n^(0.52), 1)
+
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+bm_multi1 <- mclapply(1:2000, function(j) lapply(1:length(b), function(i) mcse.multi(chain_big1[[j]], method = "bm", size=b[i])[[1]]), mc.preschedule = TRUE, mc.cores = 4)
+
+# diagonals
+Sigma.diagtrue1 <- diag(Sigma1)
+corr.offdiagtrue1 <- cov2cor(Sigma1)[lower.tri(cov2cor(Sigma1))]
+# Collect all the computed diagonal estimaors
+diag1 <- lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) diag(bm_multi1[[i]][[j]])))))
+
+# Collect all the computed off-diagonal estimators as vectors
+corr1 <- lapply(1:2000, function(j) lapply(1:length(b), function(i) cov2cor(bm_multi1[[j]][[i]])))
+corrvec1 <-  lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) corr1[[i]][[j]][lower.tri(corr1[[i]][[j]])]))))
+
+#scoremultidiag1 <- lapply(1:length(chain_big1), function(i) es_sample(Sigma.true1, dat = t(bm_multi1[[i]])))
+scoremultidiag1 <- sapply(1:length(b), function(i) es_sample(Sigma.diagtrue1, dat = t(diag1[[i]])))
+scoremultioffdiag1 <- sapply(1:length(b), function(i) es_sample(corr.offdiagtrue1, dat = t(corrvec1[[i]])))
+#c(scoremultidiag1,scoremultioffdiag1)
+
+```
+
+
+```{r}
+library(parallel)
+library(scoringRules)
+load(file = "/home/deepak/Desktop/Rdata/Sigmabig2.Rda")
+load("/home/deepak/Desktop/Rdata/chainbig2.Rda")
+n <- 5e4
+Sigma2 <- Sigma
+
+# batch sizes 
+b <- seq(n^(.3), n^(0.52), 1)
+
+set.seed(123, kind = "L'Ecuyer-CMRG" )
+bm_multi2 <- mclapply(1:length(chain_big2), function(j) lapply(1:length(b), function(i) mcse.multi(chain_big2[[j]], method = "bm", size=b[i])[[1]]), mc.preschedule = TRUE, mc.cores = 4)
+
+# diagonals
+Sigma.diagtrue2 <- diag(Sigma2)
+corr.offdiagtrue2 <- cov2cor(Sigma2)[lower.tri(cov2cor(Sigma2))]
+# Collect all the computed diagonal estimaors
+diag2 <- lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) diag(bm_multi2[[i]][[j]])))))
+
+# Collect all the computed off-diagonal estimators as vectors
+corr2 <- lapply(1:2000, function(j) lapply(1:length(b), function(i) cov2cor(bm_multi2[[j]][[i]])))
+corrvec2 <-  lapply(1:length(b), function(j) data.frame(do.call(rbind, lapply(1:2000, function(i) corr2[[i]][[j]][lower.tri(corr2[[i]][[j]])]))))
+
+#scoremultidiag1 <- lapply(1:length(chain_big1), function(i) es_sample(Sigma.true1, dat = t(bm_multi1[[i]])))
+scoremultidiag2 <- sapply(1:length(b), function(i) es_sample(Sigma.diagtrue2, dat = t(diag2[[i]])))
+scoremultioffdiag2 <- sapply(1:length(b), function(i) es_sample(corr.offdiagtrue2, dat = t(corrvec2[[i]])))
+#c(scoremultidiag1,scoremultioffdiag1)
+#c(scoremultidiag2,scoremultioffdiag2)
+
+
+```
+
+
+
