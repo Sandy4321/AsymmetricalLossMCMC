@@ -1,0 +1,624 @@
+---
+title: "LINEX_for_BM"
+author: "Deepak Bastola"
+date: "August 18, 2019"
+output: pdf_document
+---
+
+```{r, message=FALSE}
+library(mcmcse)
+library(parallel)
+require(latex2exp)
+
+```
+
+
+```{r}
+#3D Optimization
+
+# Function to create a Markov Chain
+
+chain <- function(niter, n){
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n=1, mean = 0, sd = 1)}
+  vec
+}
+
+#generate the model matrix
+#pmt <- proc.time()
+
+phi <- sample(seq(0.5, 0.95, length.out = niter), niter, replace = TRUE)
+
+mat <- mclapply(1:niter, function(i) ar1sim(n,phi[i]), mc.preschedule = TRUE, mc.cores = 6)
+
+design <- mclapply(1:niter, function(i)  sapply(1:3, function(j) {
+  x <- sample(seq(50, n^(2/3)),1)
+  b <- c(x, x/3, x/6)
+  mcse(mat[[i]], size = b[j], method = "bm")$se^2*n }
+  ), mc.preschedule = TRUE, mc.cores = 6)
+#proc.time() - pmt
+
+sigma.true <- lapply(1: niter, function(i) 1/(1-phi[[i]])^2)
+scratch <- lapply(1: length(design), function(i) append(sigma.true[[i]], design[[i]]))
+output <- matrix(unlist(scratch), ncol = 4, byrow = TRUE)
+return(output)
+}
+
+
+```
+
+
+```{r}
+# 2D Optimization
+# Using constraint alpha1 = 1 - alpha2 - alpha3
+# Force alpha2 and alpha3 to be negative
+# Searches over 2D space/ Ellipses, instead of a hypershpere/ 3D Space
+
+partial.deriv.2D <- function(y, x, c, k, alpha, lam){
+  alpha1 <- 1 - alpha[1] - alpha[2]
+  alpha2 <- alpha[1]
+  alpha3 <- alpha[2]
+  alpha.new <- c(alpha1, alpha2, alpha3)
+  ans <- sapply(1:nrow(x), function(i) c*k*(exp(c*(alpha.new%*%x[i,] - y[i,])) - 1)%*%c(x[i,1]-x[i,2],x[i,1]-x[i,3]) + 
+                  2*lam*c(2*alpha1 + alpha2 +1, 2*alpha2 + alpha1 +1))
+mean(ans)  
+}
+
+ 
+gradient.descent.2D <- function(mat, alpha, c, k, lam, eta){
+  
+  # set seed
+  set.seed(123)
+  
+  # initialize
+  alpha <- matrix(alpha, nrow = 1)
+  alphaIter <- matrix(NA, nrow(mat), 3)
+  
+for (i in 1: nrow(mat)){
+  design <- mat[sample(nrow(mat), 30, replace = TRUE),]
+  x <- as.matrix(design[,2:4])
+  y <- as.matrix(design[,1])
+    
+  alpha <- alpha - eta * partial.deriv.2D(y, x, c, k, alpha, lam)
+  alphaIter[i,] <- c(1 - alpha[1] - alpha[2], alpha)
+    
+  }
+return(as.matrix(alphaIter[nrow(mat),]))  # returns the last element
+}
+
+# k-FOLD Cross-Validation
+
+K = 10
+n.iter <- 1000
+n <- 1e4
+#phi <- 0.95
+#b <- c(100, 100/2, 100/4)
+
+out1 <- chain(n.iter, n)
+mat <- data.frame(out1)
+n.dat  <- nrow(mat) 
+x <- as.matrix(mat[,2:4])
+y <- as.matrix(mat[,1])
+
+d <- ceiling(n.dat/K)
+i.mix = sample(1:n.dat)
+folds = vector(mode="list",length=K)
+folds <- lapply(1:K, function(i) i.mix[((i-1)*d+1):(i*d)])
+ 
+
+lam.ridge <- seq(0,19, length= 500)
+nlam <- length(lam.ridge)
+# each value of tuning parameter in columns
+
+delta <- 0
+
+for (i in 1: K){
+  ind.tr = unlist(folds[-i])
+  ind.val = folds[[i]]
+
+  x.tr = x[ind.tr,]
+  y.tr = y[ind.tr]
+  x.val = x[ind.val,] 
+  y.val = y[ind.val]
+  n.tr <- nrow(x.tr)
+  n.val <- nrow(x.val)
+
+
+# get the parameters
+  c = -0.005
+  alpha0 <- c(-0.1,-0.1)
+  alpha <- mclapply(1:nlam, function(i) {
+    fit <- optim(alpha0,obj.ridge,grad.obj.ridge,method="BFGS",hessian=FALSE)
+    c(1-sum(fit$par), fit$par)
+  })
+
+# use this on test case
+
+  sigma.hat <- lapply(1:nlam, function(i) x.val%*%as.matrix(alpha[[i]]))
+  loss <- lapply(1:nlam, function(i) (exp(c*(sigma.hat[[i]] - y.val)) - c*(sigma.hat[[i]] - y.val) -1 ))
+  delta <- delta + sapply(1:nlam, function(i) mean(loss[[i]]))
+
+
+}
+lam.cv <- lam.ridge[which.min(delta)]
+
+pdf("cvLambda.pdf")
+plot(lam.ridge, delta/10, type = "l", ylab = "LINEX Loss", xlab = TeX('$\\lambda$'), main = "K-fold Cross Validation" )
+dev.off()
+
+```
+
+
+```{r}
+# Final
+# Final gradient descent
+gradient.descent.2D.final <- function(n.iter,n, phi, b, alpha, c, k, lam, eta){
+  b <- c(b, b/2, b/4)
+  mat <- chain(n.iter, n, phi, b)
+  mat <- data.frame(mat)
+  
+  # set seed
+  set.seed(123)
+  
+  # initialize
+  alpha <- matrix(alpha, nrow = 1)
+  alphaIter <- matrix(NA, nrow(mat), 3)
+  
+for (i in 1: nrow(mat)){
+  design <- mat[sample(nrow(mat), 30, replace = TRUE),]
+  x <- as.matrix(design[,2:4])
+  y <- as.matrix(design[,1])
+    
+  alpha <- alpha - eta * partial.deriv.2D(y, x, c, k, alpha, lam)
+  alphaIter[i,] <- c(1 - alpha[1] - alpha[2], alpha )
+    
+  }
+return(alphaIter[nrow(mat),])  
+}
+
+y1.95 <- replicate(10, gradient.descent.2D.final(n.iter=20000, n=1e4, 0.95, b =100, alpha = c(-0.3,-0.1 ), c = -0.005, k = 1, lam = lam.cv, eta = 0.0001))
+#y1.90 <- gradient.descent.2D.final(n.iter=1000, n=1e4, 0.90, b =150, alpha = c(-0.33,-0.1 ), c = -0.005, k = 0.1, lam = 5, eta = 0.0001)
+y1.75 <- gradient.descent.2D.final(n.iter=10000, n=1e4, 0.75, b =150, alpha = c(-0.3,-0.1 ), c = -0.005, k = 1, lam = 0.04, eta = 0.0001);y1.95
+
+```
+
+
+
+```{r}
+library(numDeriv)
+
+# Use Optim Newton's method
+n <- 1e4
+n.iter <- 10000
+mat <- chain(n.iter, n)
+mat <- data.frame(mat)
+
+c = -0.0005
+k = 0.1
+
+# objective function
+
+obj.ridge <-  function(alpha) {mean(k*(exp(c*((mat[,2] - mat[,1])+alpha[1]*(mat[,2]- mat[,3])+alpha[2]*(mat[,2]-mat[,4]))) - c*((mat[,2] - mat[,1])+alpha[1]*(mat[,2]- mat[,3])+alpha[2]*(mat[,2]-mat[,4])) - 1 )) 
+  + 0.1*(2*alpha[1]^2 + 2*alpha[1]*alpha[2] + 2*alpha[1] + 2*alpha[2]^2 + 2*alpha[2] + 1) }
+
+grad.obj.ridge <- function(alpha) {grad(func=obj.ridge, x = alpha)}
+grad.obj.lasso <- function(alpha) {grad(func=obj.lasso, x = alpha)}
+
+alpha0=c(0.1,0.1)
+fit1 <- optim(alpha0,obj.ridge,grad.obj.ridge,method="BFGS",hessian=FALSE);fit1$par
+
+alpha <- c(1-sum(fit1$par), fit1$par);alpha
+
+```
+
+
+```{r}
+#define the lugsail function
+ m.lug <- function(k,b,c=1/2,r=2,s=4, alpha){
+   
+   wn1 <- ifelse((0 <= abs(k) & abs(k) <= b), alpha[1]*(1-abs(k)/b),0)
+   wn2 <- ifelse((0 <= abs(k) & abs(k) <= b/r), alpha[2]*(1-abs(k)/(b/r)),0)
+   wn3 <- ifelse((0 <= abs(k) & abs(k) <= b/s), alpha[3]*(1-abs(k)/(b/s)),0)
+
+   wn2.l <- ifelse((0 <= abs(k) & abs(k) <= b/3), (1-abs(k)/(b/3)),0)
+   
+   
+   wnlm <- wn1 + wn2 + wn3
+   wnb <- ifelse((0 <= abs(k) & abs(k) <= b), (1-abs(k)/b),0)
+   wnb2 <- ifelse((0 <= abs(k) & abs(k) <= b/2), (1-abs(k)/(b/2)),0)
+   wnl <- 2*wnb - wn2.l
+   wnft <- 2*wnb - wnb2
+   return(c(wnlm,wnb,wnl,wnft))
+ }
+
+
+
+# Plot the corresponding window function
+b <- 150
+k <- seq(0,b,0.01)
+
+alpha = c(3, -13/6, 1/6)
+
+win <- lapply(k, function(i) m.lug(i,b, c=1/2, r=2, s=4, alpha))
+wn <- do.call(rbind, win)
+
+pdf("lagwinmm.pdf")
+
+plot(k, wn[,1], type = "l", ylim = c(0,2.5), col = "blue", ylab = "Weights", xaxt='n', lty = 1)
+lines(k, wn[,2], col = "red", lty = 2)
+lines(k,wn[,3], col = "black", lty = 3)
+lines(k,wn[,4], col = "orange", lty =4)
+axis(1, at = c(b/4,b/3, b/2,b), labels = c("b/4","b/3", "b/2","b"))
+
+legend("topright", legend = c("Modified Lugsail", "Bartlett", "Lugsail","Flat-top"),
+       lty = c(1,2,3,4), col = c("blue","red","black","orange"))
+dev.off()
+
+```
+
+
+
+```{r}
+# Optimize Lin Comb Batch Size
+linexlugb <- function(n, b, c, k, phi, coef){
+
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n=1, mean = 0, sd = 1)}
+  vec
+}
+                                                                                                                                                             
+out <- ar1sim(n, phi)
+sigma.true <- 1/(1-phi)^2
+
+sigma.mlug <- lapply(1:length(b), function(i) coef[1]*mcse(out, size = b[i], method = "bm")$se^2*n
+                   + coef[2]*mcse(out, size = b[i]/2, method = "bm")$se^2*n 
+                   + coef[3]*mcse(out, size = b[i]/4, method = "bm")$se^2*n
+                   )
+
+
+linex <- c()
+linex <- sapply(1:length(b), function(i)  k*(exp(c*(sigma.mlug[[i]] - sigma.true))-c*(sigma.mlug[[i]] - sigma.true) -1))
+mse <- sapply(1:length(b), function(i) (sigma.mlug[[i]] - sigma.true)^2)
+
+return(list(linex, mse, sigma.mlug))
+}
+
+```
+
+
+```{r}
+n <- 1e4
+c <- -0.02
+k <- 0.1
+phi = 0.95
+b <- seq(floor(n^(2/9)), floor(n^(5/8)),1) 
+
+nrep <- 5000
+alpha = c(2.67, -1.2, -0.34)
+start.time <- Sys.time()
+set.seed(123, kind = "L'Ecuyer-CMRG" );
+sim95 <- mclapply(1:nrep, function(i) linexlugb(n, b, c , k , phi = 0.95, coef = alpha), mc.preschedule = TRUE, mc.cores = 6)
+#sim90 <- mclapply(1:nrep, function(i) linexlugb(n, b, c , k , phi = 0.90, coef = y1.90), mc.preschedule = TRUE, mc.cores = 6)
+#sim95 <- mclapply(1:nrep, function(i) linexlugb(n, b, c , k , phi = 0.75, coef = y1.75), mc.preschedule = TRUE, mc.cores = 6)
+
+end.time <- Sys.time()
+end.time - start.time
+
+res95_l <- lapply(1:nrep, function(i) sim95[[i]][[1]])
+res95.l <- colMeans(do.call(rbind, res95_l))
+
+res95_m <- lapply(1:nrep, function(i) sim95[[i]][[2]])
+res95.m <- colMeans(do.call(rbind, res95_m))
+
+est <- lapply(1:nrep, function(i) sim95[[i]][[3]])
+c <- sapply(1:nrep, function(i) mean(unlist(est[[i]])))
+
+b.l <- b[which.min(res95.l)]
+b.m <- b[which.min(res95.m)]
+
+pdf("mlug_optxxxxtx0.02.pdf")
+par(mfrow= c(1,2))
+plot(b, res95.l, type = "l", xlim = c(0,300), main = "Linex Loss", ylab = "Expected LINEX Loss", xlab = "b")
+abline(v= b.l, col = "green")
+text(b.l+10, 0.003, expression(b[opt] == 39))
+plot(b, res95.m, type = "l",  xlim = c(0,300), main = "MSE Loss", ylab = "Expected MSE Loss", xlab = "b")
+abline(v= b.m, col = "green")
+text(b.m+10, 40000, expression(b[opt] == 37))
+par(mfrow = c(1,1))
+dev.off()
+
+b <- 150
+k <- seq(0,b,0.1)
+alpha = c(2.67, -1.2, -0.34)
+
+wn.lapply <- lapply(k, function(i) m.lug(i,b, 1/2, 3, 6, alpha = alpha))
+wn <- do.call(rbind, wn.lapply)
+
+pdf("lagwindowsasd.pdf")
+plot(k, wn[,1], type = "l", ylim = c(0,2.5), col = "blue", ylab = "Weights", xaxt='n', lty = 1)
+lines(k, wn[,2], col = "red", lty = 2)
+lines(k,wn[,3], col = "black", lty = 3)
+lines(k,wn[,4], col = "orange", lty =4)
+axis(1, at = c(b/4, b/2,b), labels = c("b/4","b/2","b"))
+
+legend("topright", legend = c("Modified Lugsail", "Bartlett", "Lugsail","Flat-top"),
+       lty = c(1,2,3,4), col = c("blue","red","black","orange"))
+dev.off()
+
+
+# histogram
+#centered data
+x <- c -400
+m <- mean(x)
+std <- sqrt(var(x))
+hist(x, probability = TRUE, breaks = 50)
+curve(dnorm(x, mean=m, sd=std), 
+      col="darkblue", lwd=2, add=TRUE, yaxt="n")
+
+```
+
+```{r}
+# Lugsail Lag Window
+#plot of modified lugsail
+
+#define the lugsail function
+alpha = c(4, -3/2, -1/2)
+m.lug <- function(k,b,c=1/2,r=2,s=4, alpha){
+   
+   wn1 <- ifelse((0 <= abs(k) & abs(k) <= b), alpha[1]*(1-abs(k)/b),0)
+   wn2 <- ifelse((0 <= abs(k) & abs(k) <= b/r), alpha[2]*(1-abs(k)/(b/r)),0)
+   wn3 <- ifelse((0 <= abs(k) & abs(k) <= b/s), alpha[3]*(1-abs(k)/(b/s)),0)
+
+   wn2.l <- ifelse((0 <= abs(k) & abs(k) <= b/3), (1-abs(k)/(b/3)),0)
+   
+   
+   wnlm <- wn1 + wn2 + wn3
+   wnb <- ifelse((0 <= abs(k) & abs(k) <= b), (1-abs(k)/b),0)
+   wnb2 <- ifelse((0 <= abs(k) & abs(k) <= b/2), (1-abs(k)/(b/2)),0)
+   wnl <- 2*wnb - wn2.l
+   wnft <- 2*wnb - wnb2
+   return(c(wnlm,wnb,wnl,wnft))
+ }
+
+
+b <- 50
+k <- seq(0,b,0.1)
+wn.lapply <- lapply(k, function(i) m.lug(i,b, 1/2, 2, 4, alpha = c(4, -3/2, -1/2)))
+wn <- do.call(rbind, wn.lapply)
+
+#pdf("lagwindows2.pdf")
+plot(k, wn[,1], type = "l", ylim = c(0,2.5), col = "blue", ylab = "Weights", xaxt='n', lty = 1)
+lines(k, wn[,2], col = "red", lty = 2)
+lines(k,wn[,3], col = "black", lty = 3)
+lines(k,wn[,4], col = "orange", lty =4)
+axis(1, at = c(b/4, b/2,b), labels = c("b/4","b/2","b"))
+
+legend("topright", legend = c("Modified Lugsail", "Bartlett", "Lugsail","Flat-top"),
+       lty = c(1,2,3,4), col = c("blue","red","black","orange"))
+#dev.off()
+
+
+```
+
+
+```{r}
+
+f <- function(x) (exp(-0.02*(x-400)) + 0.02*(x-400) -1)/0.1
+curve(f, 300,500)
+
+linexb <- function(n,b,c,k,phi){
+ar1sim <- function (n, rho) {
+  vec <- vector("numeric", n)
+  vec[1] <- 0
+  for (i in 2:n){vec[i] <- rho * vec[i - 1] + rnorm(n=1, mean = 0, sd = 1)}
+  vec
+}
+                                                                                                                                                             
+out <- ar1sim(n, phi)
+sigma.true <- 1/(1-phi)^2
+
+sigma.bm <- lapply(1:length(b), function(i) mcse(out, size = b[i], method = "bm")$se^2*n)
+
+linex <- c()
+mse <- c()
+linex <- sapply(1:length(b), function(i)  k*(exp(c*(sigma.bm[[i]] - sigma.true))-c*(sigma.bm[[i]] - sigma.true) -1))
+mse <- sapply(1:length(b), function(i)  (sigma.bm[[i]] - sigma.true)^2)
+  
+return(c(linex,mse))
+}
+
+
+
+```
+
+
+```{r}
+#Simulation
+n <- 1e4
+c <- -0.005
+k <- 0.1
+phi = 0.95
+b <- seq(floor(n^(1/3)), floor(n^(5/8)),1) 
+
+nrep <- 5000
+start.time <- Sys.time()
+sim95 <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.95), mc.preschedule = TRUE, mc.cores = 7)
+sim90 <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.90), mc.preschedule = TRUE, mc.cores = 7)
+sim85 <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.85), mc.preschedule = TRUE, mc.cores = 7)
+sim80 <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.80), mc.preschedule = TRUE, mc.cores = 7)
+end.time <- Sys.time()
+end.time - start.time
+
+res95 <- colMeans(do.call(rbind, sim95))
+res95.l <- res95[1:296]
+res95.m <- res95[297:592]
+
+res90 <- colMeans(do.call(rbind, sim90))
+res90.l <- res90[1:296]
+res90.m <- res90[297:592]
+
+res85 <- colMeans(do.call(rbind, sim85))
+res85.l <- res85[1:296]
+res85.m <- res85[297:592]
+
+res80 <- colMeans(do.call(rbind, sim80))
+res80.l <- res80[1:296]
+res80.m <- res80[297:592]
+
+b95.l <- b[which.min(res95.l)]
+b95.m <- b[which.min(res95.m)]
+
+b90.l <- b[which.min(res90.l)]
+b90.m <- b[which.min(res90.m)]
+
+b85.l <- b[which.min(res85.l)]
+b85.m <- b[which.min(res85.m)]
+
+b80.l <- b[which.min(res80.l)]
+b80.m <- b[which.min(res80.m)]
+
+
+pdf("b_opt_l.pdf")
+par(mfrow = c(2,2))
+plot(b, res95[1:length(b)], type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.95$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b95.l, col = "green")
+text(b95.l+9, 0.08, expression(b[opt] == 163))
+
+plot(b, res90[1:length(b)], type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.90$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b90.l, col = "green")
+text(b90.l+9, 0.00138, expression(b[opt] == 97))
+
+plot(b, res85[1:length(b)], type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.85$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b85.l, col = "green")
+text(b85.l+9, 0.00015, expression(b[opt] == 69))
+
+plot(b, res80[1:length(b)], type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.80$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b80.l, col = "green")
+text(b80.l+9, 0.00004, expression(b[opt] ==  55))
+par(mfrow = c(1,1))
+dev.off()
+
+
+pdf("b_opt_m.pdf")
+par(mfrow = c(2,2))
+plot(b, res95.m, type = "l", ylab = "MSE loss", xlab = "b", main = TeX('$\\phi = 0.95$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b95.m, col = "green")
+text(b95.m+9, 40000, expression(b[opt] == 163))
+
+plot(b, res90.m, type = "l", ylab = "MSE loss", xlab = "b", main = TeX('$\\phi = 0.90$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b90.m, col = "green")
+text(b90.m+9, 1000, expression(b[opt] == 97))
+
+plot(b, res85.m, type = "l", ylab = "MSE loss", xlab = "b", main = TeX('$\\phi = 0.85$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b85.m, col = "green")
+text(b85.m+9, 120, expression(b[opt] == 69))
+
+plot(b, res80.m, type = "l", ylab = "MSE loss", xlab = "b", main = TeX('$\\phi = 0.80$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b80.m, col = "green")
+text(b80.m+9, 30, expression(b[opt] ==  55))
+par(mfrow = c(1,1))
+dev.off()
+
+
+```
+
+
+```{r}
+# simulation n = 1e5
+n <- 1e4
+c <- -0.05
+k <- 0.2
+
+b <- seq(floor(n^(1/3)), floor(n^(5/8)),1) 
+
+nrep <- 500
+
+start.time <- Sys.time()
+sim95x <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.95), mc.preschedule = TRUE, mc.cores = 7)
+sim90x <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.90), mc.preschedule = TRUE, mc.cores = 7)
+sim85x <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.85), mc.preschedule = TRUE, mc.cores = 7)
+sim80x <- mclapply(1:nrep, function(i) linexb(n, b, c , k , phi = 0.80), mc.preschedule = TRUE, mc.cores = 7)
+end.time <- Sys.time()
+end.time - start.time
+
+res95x <- colMeans(do.call(rbind, sim95x))
+res90x <- colMeans(do.call(rbind, sim90x))
+res85x <- colMeans(do.call(rbind, sim85x))
+res80x <- colMeans(do.call(rbind, sim80x))
+
+b95x <- b[which.min(res95x)]
+b90x <- b[which.min(res90x)]
+b85x <- b[which.min(res85x)]
+b80x <- b[which.min(res80x)]
+
+pdf("b_optx.pdf")
+par(mfrow = c(2,2))
+plot(b, res95x, type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.95$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b95x, col = "green")
+text(b95x+9, 0.08, expression(b[opt] == 159))
+
+plot(b, res90x, type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.90$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b90x, col = "green")
+text(b90x+9, 0.00138, expression(b[opt] == 100))
+
+plot(b, res85x, type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.85$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b85x, col = "green")
+text(b90x+9, 0.00015, expression(b[opt] == 68))
+
+plot(b, res80x, type = "l", ylab = "Expected LINEX loss", xlab = "b", main = TeX('$\\phi = 0.80$'), lty = 1, lwd = 2, col = "blue")
+abline(v= b80x, col = "green")
+text(b90x+9, 0.00004, expression(b[opt] ==  57))
+par(mfrow = c(1,1))
+dev.off()
+
+
+```
+
+```{r}
+# Partial derivative 2D
+
+partial.deriv.2D.old <- function(y, x, c, k, alpha, lam){
+  alpha1 <- alpha[1]
+  alpha2 <- alpha[2]
+  alpha3 <- 1 - alpha1 - alpha2
+  alpha.new <- c(alpha1, alpha2, alpha3)
+ #factor1 <- c*k*(exp(c*(alpha.new%*%x[1,] - y[1])) - 1)%*%c(x[1,1]-x[1,3],x[1,2]-x[1,3]) 
+ #factor2 <- 2*lam*c(2*alpha1 + alpha2 -1, 2*alpha2 + alpha1 -1)
+  ans <- sapply(1:nrow(x), function(i) c*k*(exp(c*(alpha.new%*%x[i,] - y[i,])) - 1)%*%c(x[i,1]-x[i,3],x[i,2]-x[i,3]) + 
+                  2*lam*c(2*alpha1 + alpha2 -1, 2*alpha2 + alpha1 -1))
+mean(ans)  
+}
+
+
+# partial derivatives, evaluated at single point
+partial.deriv <- function(y, x, c, k, alpha, lam, gam){
+  ans <- sapply(1:nrow(x), function(i) c*k*(exp(c*(alpha%*%x[i,] - y[i,]))-1)%*%x[i,] + 2*lam*alpha + rep(1,3)*gam)
+mean(ans)  
+}
+
+# stochastic batch gradient descent
+gradient.descent <- function(mat, alpha, c, k, lam, gam, eta){
+  mat <- data.frame(mat)
+  # initialize
+  alpha <- matrix(alpha, nrow = 1)
+  alphaIter <- matrix(NA, nrow(mat), 3)
+  
+  # set seed
+  set.seed(123)
+  
+for (i in 1: nrow(mat)){
+  design <- mat[sample(nrow(mat), 50, replace = TRUE),]
+  x <- as.matrix(design[,2:4])
+  y <- as.matrix(design[,1])
+    
+  alpha <- alpha - eta * partial.deriv(y, x, c, k, alpha, lam, gam)
+  alphaIter[i,] <- alpha
+    
+  }
+return(alphaIter)  
+}
+```
